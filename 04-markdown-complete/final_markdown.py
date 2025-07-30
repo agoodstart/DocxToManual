@@ -4,10 +4,21 @@ import re
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
-# Claude model ID
+# Constants
 CLAUDE_MODEL_ID = "anthropic.claude-3-sonnet-20240229-v1:0"
+BUCKET_NAME = "teamcenter-doc-ingest"
 
-# AWS client for Bedrock
+# Required ENV variable
+CHAPTER_FOLDER = os.environ.get("CHAPTER_FOLDER")
+if not CHAPTER_FOLDER:
+    print("[ERROR] CHAPTER_FOLDER environment variable not set.")
+    exit(1)
+
+SOURCE_PREFIX = f"markdown/{CHAPTER_FOLDER}/"
+TARGET_KEY = f"final-output/{CHAPTER_FOLDER}.md"
+
+# AWS clients
+s3 = boto3.client("s3")
 bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
 
 # ---- Claude Invocation ----
@@ -37,24 +48,37 @@ def call_bedrock_claude(prompt):
 
 # ---- Markdown Handling ----
 
-def extract_step_number(filename):
-    """Extracts step number from filename like 'step_03.md' or '03_disk.md'"""
-    match = re.search(r"(\d+)", filename)
+def extract_step_number(key):
+    match = re.search(r"(\d+)", key)
     return int(match.group(1)) if match else 0
 
-def combine_markdown_files(source_dir):
-    """Combines individual step markdowns into a single markdown string"""
+def list_markdown_files():
+    try:
+        response = s3.list_objects_v2(Bucket=BUCKET_NAME, Prefix=SOURCE_PREFIX)
+        keys = [
+            obj["Key"] for obj in response.get("Contents", [])
+            if obj["Key"].endswith(".md")
+        ]
+        return sorted(keys, key=extract_step_number)
+    except ClientError as e:
+        print(f"[ERROR] Failed to list markdown files: {e}")
+        return []
+
+def download_markdown(key):
+    try:
+        response = s3.get_object(Bucket=BUCKET_NAME, Key=key)
+        return response["Body"].read().decode("utf-8")
+    except ClientError as e:
+        print(f"[ERROR] Failed to download {key}: {e}")
+        return ""
+
+def combine_markdown_from_s3(keys):
     combined = ""
-    files = sorted(
-        [f for f in os.listdir(source_dir) if f.endswith(".md")],
-        key=extract_step_number
-    )
-    for f in files:
-        filepath = os.path.join(source_dir, f)
-        step_number = extract_step_number(f)
-        with open(filepath, "r", encoding="utf-8") as file:
-            combined += f"### Step {step_number}\n\n"
-            combined += file.read().strip() + "\n\n"
+    for key in keys:
+        step_number = extract_step_number(key)
+        content = download_markdown(key).strip()
+        if content:
+            combined += f"### Step {step_number}\n\n{content}\n\n"
     return combined
 
 # ---- Prompt Template ----
@@ -79,20 +103,35 @@ Prepare the result so it can be used directly in a provisioning manual.
 --- END DRAFT ---
 """.strip()
 
+# ---- Upload Final Result ----
+
+def upload_to_s3(key, content):
+    try:
+        s3.put_object(
+            Bucket=BUCKET_NAME,
+            Key=key,
+            Body=content.encode("utf-8"),
+            ContentType="text/markdown"
+        )
+        print(f"✅ Uploaded to: s3://{BUCKET_NAME}/{key}")
+    except ClientError as e:
+        print(f"[ERROR] Upload failed: {e}")
+
 # ---- Main Execution ----
 
 if __name__ == "__main__":
-    input_dir = "generated_steps"
-    output_file = "01-provisioning.md"
+    print(f"[INFO] Gathering Markdown files from: s3://{BUCKET_NAME}/{SOURCE_PREFIX}")
+    markdown_keys = list_markdown_files()
 
-    print("[INFO] Combining markdown files...")
-    raw_markdown = combine_markdown_files(input_dir)
+    if not markdown_keys:
+        print("[WARN] No markdown files found.")
+        exit(0)
 
-    print("[INFO] Building prompt and sending to Claude...")
-    prompt = build_claude_prompt(raw_markdown)
-    final_markdown = call_bedrock_claude(prompt)
+    print(f"[INFO] Downloading and combining {len(markdown_keys)} files...")
+    raw_markdown = combine_markdown_from_s3(markdown_keys)
 
-    with open(output_file, "w", encoding="utf-8") as out:
-        out.write(final_markdown)
+    print("[INFO] Sending prompt to Claude...")
+    final_markdown = call_bedrock_claude(build_claude_prompt(raw_markdown))
 
-    print(f"✅ Refined provisioning section saved to: {output_file}")
+    print("[INFO] Uploading final output...")
+    upload_to_s3(TARGET_KEY, final_markdown)
