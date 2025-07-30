@@ -22,65 +22,72 @@ bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
 
 CLAUDE_MODEL_ID = "anthropic.claude-3-sonnet-20240229-v1:0"
 
-def list_textract_files():
+def list_text_files():
     try:
         response = s3.list_objects_v2(Bucket=bucket, Prefix=source_prefix)
         contents = response.get("Contents", [])
-        return [obj["Key"] for obj in contents if obj["Key"].endswith("_textract.json")]
+        return [obj["Key"] for obj in contents if obj["Key"].endswith(".txt")]
     except ClientError as e:
         print(f"[ERROR] Listing files: {e}")
         return []
 
-def read_textract_from_s3(key):
+def read_txt_from_s3(key):
     try:
         response = s3.get_object(Bucket=bucket, Key=key)
-        data = json.load(response["Body"])
-        lines = [b['Text'] for b in data.get('Blocks', []) if b.get('BlockType') == 'LINE' and 'Text' in b]
-        return "\n".join(lines)
+        return response["Body"].read().decode("utf-8")
     except Exception as e:
         print(f"[ERROR] Reading {key}: {e}")
         return ""
 
 def build_prompt(extracted_text):
     return f"""
-You are a professional technical writer documenting a step in a virtualization guide. A screenshot was processed, and the following user interface texts were extracted from the image.
+You are a professional technical writer responsible for documenting complex IT setup instructions, including but not limited to:
 
-Your job is to:
-1. Recognize what this step is about (e.g., customizing VM hardware).
-2. Write clear instructions for the user to follow.
-3. Include all relevant parameters (CPU, memory, disk, network, etc.).
-4. Use formal, concise language suitable for IT documentation.
-5. Do not include UI elements that are unrelated or unclear.
+- Provisioning VMs and configuring hypervisors (e.g., vSphere)
+- Installing operating systems and configuring hardware
+- Installing and configuring middleware (Java, Tomcat)
+- Installing and configuring databases (SQL Server, Oracle)
+- Performing enterprise software installations (e.g., Teamcenter)
+- Setting up deployment tools and automation (e.g., Deployment Center)
+- Network configuration, licensing, and security settings
+
+A screenshot was processed using OCR. Your task is to:
+1. Identify what the screenshot is instructing the user to do.
+2. Write a precise, step-by-step instruction for that action.
+3. Avoid hallucination; if unsure, provide only what is visible or implied.
+4. Use clear, formal language suitable for technical documentation.
+5. End with a helpful note if applicable (e.g., software dependencies, account permissions).
+6. Preserve the sequence of callout numbers (e.g., 1, 2, 3) to structure your output.
 
 Here is the extracted UI text:
 \"\"\"
 {extracted_text}
 \"\"\"
 
-Write a configuration step for the manual.
+Write a documentation step for this screenshot.
 """.strip()
 
-def call_bedrock_claude(prompt):
-    body = {
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 1024,
-        "temperature": 0.2,
-        "messages": [
-            {"role": "user", "content": prompt}
-        ]
-    }
-    try:
-        response = bedrock.invoke_model(
-            modelId=CLAUDE_MODEL_ID,
-            contentType="application/json",
-            accept="application/json",
-            body=json.dumps(body)
-        )
-        result = json.loads(response["body"].read())
-        return result["content"][0]["text"].strip()
-    except (BotoCoreError, ClientError, KeyError, IndexError) as e:
-        print(f"[ERROR] Claude error: {e}")
-        return ""
+def call_bedrock_claude(prompt, retries=3):
+    for attempt in range(retries):
+        try:
+            body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 1024,
+                "temperature": 0.2,
+                "messages": [{"role": "user", "content": prompt}]
+            }
+
+            response = bedrock.invoke_model(
+                modelId=CLAUDE_MODEL_ID,
+                contentType="application/json",
+                accept="application/json",
+                body=json.dumps(body)
+            )
+            result = json.loads(response["body"].read())
+            return result["content"][0]["text"].strip()
+        except (BotoCoreError, ClientError, KeyError, IndexError) as e:
+            print(f"[Retry {attempt + 1}] Claude error: {e}")
+    return ""
 
 def upload_markdown_to_s3(filename, content):
     key = target_prefix + filename
@@ -96,16 +103,17 @@ def upload_markdown_to_s3(filename, content):
         print(f"[ERROR] Upload failed for {filename}: {e}")
 
 def main():
-    print(f"[INFO] Processing files from: s3://{bucket}/{source_prefix}")
-    keys = list_textract_files()
+    print(f"[INFO] Processing TXT files from: s3://{bucket}/{source_prefix}")
+    keys = list_text_files()
     if not keys:
-        print("[WARN] No textract JSON files found.")
+        print("[WARN] No .txt files found.")
         return
 
     for key in tqdm(keys, desc="Generating Markdown"):
-        base_name = os.path.basename(key).replace("_textract.json", "")
-        extracted_text = read_textract_from_s3(key)
-        if not extracted_text:
+        base_name = os.path.basename(key).replace(".txt", "")
+        extracted_text = read_txt_from_s3(key)
+        if not extracted_text.strip():
+            print(f"[SKIP] {key} is empty.")
             continue
 
         prompt = build_prompt(extracted_text)

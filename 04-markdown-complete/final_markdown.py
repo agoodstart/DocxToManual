@@ -78,29 +78,45 @@ def combine_markdown_from_s3(keys):
         step_number = extract_step_number(key)
         content = download_markdown(key).strip()
         if content:
-            combined += f"### Step {step_number}\n\n{content}\n\n"
+            combined += f"### Step {step_number}\n\n{content}\n\n---\n\n"
     return combined
 
 # ---- Prompt Template ----
 
 def build_claude_prompt(raw_markdown):
     return f"""
-You are a technical documentation assistant.
+You are a senior technical documentation engineer. The following is a draft collection of configuration steps that were generated from annotated screenshots during a complex enterprise software installation.
 
-Below is a series of markdown-formatted configuration steps that were generated from processed screenshots. These steps may be out of order, redundant, or inconsistently written.
+This documentation is intended to guide an infrastructure or IT engineer through the full setup of a Teamcenter environment.
 
-Your task is to:
-- Reorder the steps logically (e.g., provisioning order, dependencies)
-- Remove any redundant or irrelevant content
-- Keep instructions clear, formal, and concise
-- Preserve important technical details
-- Maintain valid Markdown formatting (headings, lists, code blocks)
+Your job is to:
+1. Reorder the steps **logically** according to a typical enterprise deployment workflow, such as:
+   - VM provisioning (hypervisors like vSphere)
+   - OS installation and configuration (Windows Server, etc.)
+   - Middleware setup (Java, Tomcat, SQL Server)
+   - Application installation (Teamcenter, Deployment Center)
+   - Post-installation (Licensing, testing, user setup)
 
-Prepare the result so it can be used directly in a provisioning manual.
+2. Remove any redundant or ambiguous steps.
+
+3. Maintain and **improve formatting** using Markdown:
+   - Keep clear `### Step` headers (or group them under high-level `##` headings)
+   - Preserve or improve bullet points, numbered lists, and inline code
+   - Ensure code blocks are fenced using triple backticks
+
+4. Keep the writing style concise, consistent, and instructional. Avoid filler phrases.
+
+5. If steps are missing critical context, add short **notes or assumptions** to help the reader.
+
+Here is the draft content to improve:
 
 --- BEGIN DRAFT ---
+
 {raw_markdown}
+
 --- END DRAFT ---
+
+Now return the final improved Markdown guide.
 """.strip()
 
 # ---- Upload Final Result ----

@@ -6,7 +6,6 @@ from tqdm import tqdm
 
 # AWS clients
 s3 = boto3.client('s3')
-rekognition = boto3.client('rekognition')
 textract = boto3.client('textract')
 
 # Get chapter folder from environment variable
@@ -18,72 +17,63 @@ if not chapter_folder:
 bucket = 'teamcenter-doc-ingest'
 prefix = f"extracted-images/{chapter_folder}/"
 
-# Output dir per chapter
-output_dir = os.path.join('output_results', chapter_folder)
-os.makedirs(output_dir, exist_ok=True)
-
 def list_png_files(bucket, prefix):
     response = s3.list_objects_v2(Bucket=bucket, Prefix=prefix)
     return [obj['Key'] for obj in response.get('Contents', []) if obj['Key'].endswith('.png')]
 
 def analyze_image(bucket, key):
-    s3_image = {'S3Object': {'Bucket': bucket, 'Name': key}}
+    return textract.detect_document_text(Document={'S3Object': {'Bucket': bucket, 'Name': key}})
 
-    rekognition_response = rekognition.detect_labels(
-        Image=s3_image,
-        MaxLabels=10,
-        MinConfidence=75
-    )
+def extract_ordered_lines(textract_data):
+    lines = [
+        {
+            "text": block["Text"],
+            "top": block["Geometry"]["BoundingBox"]["Top"]
+        }
+        for block in textract_data.get("Blocks", [])
+        if block.get("BlockType") == "LINE" and "Text" in block
+    ]
+    return sorted(lines, key=lambda x: x["top"])
 
-    textract_response = textract.detect_document_text(
-        Document=s3_image
-    )
+def detect_numbered_steps(ordered_lines):
+    steps = []
+    skip_next = False
+    for i, line in enumerate(ordered_lines):
+        if skip_next:
+            skip_next = False
+            continue
+        if line["text"].strip() in {"1", "2", "3", "4", "5", "6", "7", "8"}:
+            label = line["text"].strip()
+            if i + 1 < len(ordered_lines):
+                next_line = ordered_lines[i + 1]
+                steps.append(f"{label}. {next_line['text']}")
+                skip_next = True
+        else:
+            steps.append(line["text"])
+    return steps
 
-    return rekognition_response, textract_response
-
-def save_json(data, filename):
-    with open(os.path.join(output_dir, filename), 'w') as f:
-        json.dump(data, f, indent=2)
-
-def save_json_to_s3(data, filename):
-    key = f"ocr-text/{chapter_folder}/{filename}"
+def save_txt_to_s3(steps, filename):
+    key = f"ocr-text/{chapter_folder}/{filename}.txt"
+    body = "\n".join(steps)
     s3.put_object(
         Bucket=bucket,
         Key=key,
-        Body=json.dumps(data, indent=2),
-        ContentType='application/json'
+        Body=body.encode("utf-8"),
+        ContentType='text/plain'
     )
-    print(f"Uploaded {key}")
-
-def summarize(key, rekog, textx):
-    print(f"\n--- {key} ---")
-    print("Rekognition Labels:")
-    for label in rekog['Labels']:
-        print(f" - {label['Name']} ({label['Confidence']:.1f}%)")
-
-    print("First few lines of detected text:")
-    lines = [b['Text'] for b in textx['Blocks'] if b['BlockType'] == 'LINE']
-    for line in lines[:3]:
-        print(f" - {line}")
-    if len(lines) > 3:
-        print(" - ...")
+    print(f"[OK] Uploaded text: {key}")
 
 def main():
-    print(f"Analyzing images in S3: s3://{bucket}/{prefix}")
-    image_keys = list_png_files(bucket, prefix)
+    print(f"Analyzing: s3://{bucket}/{prefix}")
+    keys = list_png_files(bucket, prefix)
 
-    if not image_keys:
-        print("No .png images found.")
-        return
+    for key in tqdm(keys, desc="Processing images"):
+        textract_data = analyze_image(bucket, key)
+        ordered_lines = extract_ordered_lines(textract_data)
+        steps = detect_numbered_steps(ordered_lines)
 
-    for key in tqdm(image_keys, desc="Processing images"):
-        rekog_data, textract_data = analyze_image(bucket, key)
-
-        short_name = os.path.basename(key).replace('.png', '')
-        save_json_to_s3(rekog_data, f"{short_name}_rekognition.json")
-        save_json_to_s3(textract_data, f"{short_name}_textract.json")
-
-        summarize(key, rekog_data, textract_data)
+        base_name = os.path.basename(key).replace('.png', '')
+        save_txt_to_s3(steps, base_name)
 
 if __name__ == "__main__":
     main()
