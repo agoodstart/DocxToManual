@@ -1,0 +1,96 @@
+{
+  "Comment": "Process Teamcenter Documentation",
+  "StartAt": "Extract OCR from PNGs",
+  "States": {
+    "Extract OCR from PNGs": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "LaunchType": "FARGATE",
+        "Cluster": "YOUR_ECS_CLUSTER_NAME",
+        "TaskDefinition": "png-to-ocr-task:1",
+        "NetworkConfiguration": {
+          "awsvpcConfiguration": {
+            "Subnets": ["subnet-abc123"],
+            "AssignPublicIp": "ENABLED",
+            "SecurityGroups": ["sg-abc123"]
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "png-to-ocr-container",
+              "Environment": [
+                {
+                  "Name": "CHAPTER_FOLDER",
+                  "Value.$": "$.chapter_folder"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "Next": "Convert OCR to Markdown"
+    },
+    "Convert OCR to Markdown": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "LaunchType": "FARGATE",
+        "Cluster": "YOUR_ECS_CLUSTER_NAME",
+        "TaskDefinition": "ocr-to-md-task:1",
+        "NetworkConfiguration": {
+          "awsvpcConfiguration": {
+            "Subnets": ["subnet-abc123"],
+            "AssignPublicIp": "ENABLED",
+            "SecurityGroups": ["sg-abc123"]
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "ocr-to-md-container",
+              "Environment": [
+                {
+                  "Name": "CHAPTER_FOLDER",
+                  "Value.$": "$.chapter_folder"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "Next": "Generate Final Markdown"
+    },
+    "Generate Final Markdown": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "LaunchType": "FARGATE",
+        "Cluster": "YOUR_ECS_CLUSTER_NAME",
+        "TaskDefinition": "md-to-final-task:1",
+        "NetworkConfiguration": {
+          "awsvpcConfiguration": {
+            "Subnets": ["subnet-abc123"],
+            "AssignPublicIp": "ENABLED",
+            "SecurityGroups": ["sg-abc123"]
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "md-to-final-container",
+              "Environment": [
+                {
+                  "Name": "CHAPTER_FOLDER",
+                  "Value.$": "$.chapter_folder"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "End": true
+    }
+  }
+}
