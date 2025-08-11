@@ -2,3 +2,5 @@ docs/
 docx-to-image/output
 docx-to-image/command.txt
 split-docx/
+commands.txt
+nginx.conf

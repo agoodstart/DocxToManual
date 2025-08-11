@@ -1,0 +1,10 @@
+{
+  "Records": [
+    {
+      "s3": {
+        "bucket": { "name": "docxtomanual" },
+        "object": { "key": "raw-uploads/01-provisioning.docx" }
+      }
+    }
+  ]
+}
