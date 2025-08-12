@@ -1,0 +1,16 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "",
+            "Principal": {
+                "AWS": [
+                    "arn:aws:iam::"
+                ]
+            },
+            "Effect": "Allow",
+            "Action": [],
+            "Resource": []
+        }
+    ] 
+}
