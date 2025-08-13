@@ -36,17 +36,38 @@ def _hash_stream(body: bytes) -> str:
 def _get_event_bucket_key(event):
     """
     Supports:
-    - EventBridge S3 'Object Created' event (recommended)
-    - Manual invoke with { "bucket": "...", "key": "..." }
+    1) EventBridge S3 'Object Created' (source=aws.s3, detail-type=Object Created)
+       event["detail"]["bucket"]["name"], event["detail"]["object"]["key"], detail.object.etag/size
+    2) S3 Notification event (Records[0].s3.bucket.name / s3.object.key)
+    3) Manual invoke: { "bucket": "...", "key": "..." }
     """
-    if "detail" in event and "bucket" in event["detail"]:
-        bucket = event["detail"]["bucket"]["name"]
-        key = unquote_plus(event["detail"]["object"]["key"])
-        etag = event["detail"]["object"].get("etag")
-        size = event["detail"]["object"].get("size")
-        return bucket, key, etag, size
-    # manual/test
-    return event["bucket"], event["key"], None, None
+    # 1) EventBridge S3 event
+    if isinstance(event, dict) and "detail" in event and isinstance(event["detail"], dict):
+        d = event["detail"]
+        if "bucket" in d and "object" in d and "name" in d["bucket"] and "key" in d["object"]:
+            bucket = d["bucket"]["name"]
+            key = unquote_plus(d["object"]["key"])
+            etag = d["object"].get("etag") or d["object"].get("eTag")
+            size = d["object"].get("size")
+            return bucket, key, etag, size
+
+    # 2) S3 Notification event
+    if "Records" in event and event["Records"]:
+        rec = event["Records"][0]
+        if "s3" in rec and "bucket" in rec["s3"] and "object" in rec["s3"]:
+            bucket = rec["s3"]["bucket"]["name"]
+            key = unquote_plus(rec["s3"]["object"]["key"])
+            etag = rec["s3"]["object"].get("eTag") or rec["s3"]["object"].get("etag")
+            size = rec["s3"]["object"].get("size")
+            return bucket, key, etag, size
+
+    # 3) Manual test: { "bucket": "...", "key": "..." }
+    if "bucket" in event and "key" in event:
+        return event["bucket"], event["key"], None, None
+
+    raise ValueError(
+        "Unsupported event shape. Provide EventBridge S3 event, S3 Notification event, or {bucket,key}."
+    )
 
 def lambda_handler(event, context):
     start = time.time()
